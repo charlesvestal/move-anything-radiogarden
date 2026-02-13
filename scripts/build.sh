@@ -44,6 +44,11 @@ if [ -f "$REPO_ROOT/build/deps/bin/ffmpeg" ]; then
   mkdir -p dist/radiogarden/bin
   cp "$REPO_ROOT/build/deps/bin/ffmpeg" dist/radiogarden/bin/ffmpeg
   chmod +x dist/radiogarden/bin/ffmpeg
+  # Include FFmpeg GPL license for compliance
+  FFMPEG_LICENSE="$REPO_ROOT/build/deps/work/ffmpeg-extract/ffmpeg-master-latest-linuxarm64-gpl/LICENSE.txt"
+  if [ -f "$FFMPEG_LICENSE" ]; then
+    cp "$FFMPEG_LICENSE" dist/radiogarden/FFMPEG_LICENSE.txt
+  fi
 else
   echo "WARNING: build/deps/bin/ffmpeg not found."
   echo "         Run ./scripts/build-deps.sh first to download ffmpeg."
