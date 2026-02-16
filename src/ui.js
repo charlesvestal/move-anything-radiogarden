@@ -1208,13 +1208,79 @@ function doFetchStations() {
   statusMessage = stations.length + ' stations';
 }
 
+/* ── nav state persistence ────────────────────────────────────────── */
+
+const NAV_STATE_PATH = '/tmp/radiogarden_nav.json';
+
+function saveNavState(continent, country, cityName, stationList) {
+  try {
+    const f = std.open(NAV_STATE_PATH, 'w');
+    if (f) {
+      f.puts(JSON.stringify({
+        continent: continent || '',
+        country: country || '',
+        city: cityName || '',
+        stations: stationList || []
+      }));
+      f.close();
+    }
+  } catch (e) {}
+}
+
+function loadNavState() {
+  try {
+    const f = std.open(NAV_STATE_PATH, 'r');
+    if (!f) return null;
+    let raw = '';
+    let chunk;
+    while ((chunk = f.readAsString(1024)) !== null && chunk.length > 0)
+      raw += chunk;
+    f.close();
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+function navigateBack() {
+  if (menuStack.depth() <= 1) {
+    saveNavState('', '', '', []);
+    host_return_to_menu();
+  } else {
+    menuStack.pop();
+    const prev = menuStack.current();
+    if (prev && typeof prev.selectedIndex === 'number') {
+      menuState.selectedIndex = prev.selectedIndex;
+    } else {
+      menuState.selectedIndex = 0;
+    }
+    /* Re-save nav state for the level we landed on.
+     * Stack titles: depth 1 = "Radio Garden", depth 2 = continent, depth 3 = country */
+    const depth = menuStack.depth();
+    if (depth <= 1) {
+      saveNavState('', '', '', []);
+    } else if (depth === 2) {
+      saveNavState(prev.title, '', '', []);
+    } else if (depth === 3) {
+      /* At city list — continent is the second title in the path */
+      const path = menuStack.getPath();
+      const continent = path.length >= 2 ? path[1] : '';
+      saveNavState(continent, prev.title, '', []);
+    }
+    needsRedraw = true;
+  }
+}
+
 /* ── menu building ────────────────────────────────────────────────── */
 
 function buildRootMenu() {
   const continents = unique(CITIES.map(c => c.continent));
-  const items = continents.map(cont =>
+  const items = [
+    createAction('[Back]', () => { saveNavState('', '', '', []); host_return_to_menu(); })
+  ].concat(continents.map(cont =>
     createAction(cont, () => openCountryMenu(cont))
-  );
+  ));
   return { title: 'Radio Garden', items };
 }
 
@@ -1222,11 +1288,14 @@ function openCountryMenu(continent) {
   const countries = unique(
     CITIES.filter(c => c.continent === continent).map(c => c.country)
   );
-  const items = countries.map(country =>
+  const items = [
+    createAction('[Back]', () => navigateBack())
+  ].concat(countries.map(country =>
     createAction(country, () => openCityMenu(continent, country))
-  );
+  ));
   menuStack.push({ title: continent, items, selectedIndex: 0 });
   menuState.selectedIndex = 0;
+  saveNavState(continent, '');
   needsRedraw = true;
 }
 
@@ -1234,11 +1303,14 @@ function openCityMenu(continent, country) {
   const cities = CITIES.filter(
     c => c.continent === continent && c.country === country
   );
-  const items = cities.map(entry =>
+  const items = [
+    createAction('[Back]', () => navigateBack())
+  ].concat(cities.map(entry =>
     createAction(entry.city, () => startFetchStations(entry.city, entry.country))
-  );
+  ));
   menuStack.push({ title: country, items, selectedIndex: 0 });
   menuState.selectedIndex = 0;
+  saveNavState(continent, country);
   needsRedraw = true;
 }
 
@@ -1251,15 +1323,27 @@ function startFetchStations(cityName, countryName) {
 }
 
 function openStationMenu() {
-  const items = stations.map(st =>
+  const items = [
+    createAction('[Back]', () => navigateBack())
+  ].concat(stations.map(st =>
     createAction(cleanLabel(st.title), () => playStation(st))
-  );
+  ));
   menuStack.push({
     title: fetchCityName + ' Radio',
     items,
     selectedIndex: 0
   });
   menuState.selectedIndex = 0;
+  /* Save full nav path including cached stations */
+  const cityEntry = CITIES.find(
+    c => c.city === fetchCityName && c.country === fetchCountryName
+  );
+  saveNavState(
+    cityEntry ? cityEntry.continent : '',
+    fetchCountryName,
+    fetchCityName,
+    stations
+  );
   needsRedraw = true;
 }
 
@@ -1330,6 +1414,22 @@ globalThis.init = function () {
   const root = buildRootMenu();
   menuStack.push({ title: root.title, items: root.items, selectedIndex: 0 });
   menuState.selectedIndex = 0;
+
+  /* Restore saved navigation state */
+  const saved = loadNavState();
+  if (saved && saved.continent) {
+    openCountryMenu(saved.continent);
+    if (saved.country) {
+      openCityMenu(saved.continent, saved.country);
+      if (saved.city && Array.isArray(saved.stations) && saved.stations.length > 0) {
+        /* Restore cached station list */
+        fetchCityName = saved.city;
+        fetchCountryName = saved.country;
+        stations = saved.stations;
+        openStationMenu();
+      }
+    }
+  }
 };
 
 globalThis.tick = function () {
@@ -1435,19 +1535,7 @@ globalThis.onMidiMessageInternal = function (data) {
     items: current.items,
     state: menuState,
     stack: menuStack,
-    onBack: () => {
-      if (menuStack.depth() <= 1) {
-        host_return_to_menu();
-      } else {
-        menuStack.pop();
-        const prev = menuStack.current();
-        if (prev && typeof prev.selectedIndex === 'number') {
-          menuState.selectedIndex = prev.selectedIndex;
-        } else {
-          menuState.selectedIndex = 0;
-        }
-      }
-    },
+    onBack: () => { saveNavState('', '', '', []); host_return_to_menu(); },
     shiftHeld
   });
 
